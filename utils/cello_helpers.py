@@ -7,7 +7,6 @@ print_centered(), debug_print(), print_json(), print_table(), print_row(), print
 
 import json
 import math
-import log
 
 '''
 pseudocode:
@@ -94,14 +93,12 @@ def query_helper(dict_list, key, vals):
     :param vals:
     :return:
     """
-    out_temp = []
+    out = []
     for d in dict_list:
         if key in list(d.keys()):
             if d[key] in vals:
-                out_temp.append(d)
-    if out_temp is []:
-        log.cf.error('Query helper result is invalid...')
-    return out_temp
+                out.append(d)
+    return out
 
 
 def print_centered(text, padding=False):
@@ -112,17 +109,16 @@ def print_centered(text, padding=False):
     """
     length = 88  # Length of the string of slashes
     if padding:
-        log.cf.info('\n')
-    log.cf.info("/" * length)
+        print()
+    print("/" * length)
     if type(text) == list:
         for t in text:
-            log.cf.info(t.center(length))
+            print(t.center(length))
     else:
-        log.cf.info(text.center(length))
-    log.cf.info("/" * length)
-    log.cf.info('\n')
+        print(text.center(length))
+    print("/" * length)
     if padding:
-        log.cf.info('\n')
+        print()
 
 
 def debug_print(msg, padding=True):
@@ -131,11 +127,12 @@ def debug_print(msg, padding=True):
     :param msg:
     :param padding:
     """
-    integral = '\u222b'  # str: ∫,   utf-8: '\u222b',   byte: b'\xe2\x88\xab'
+    # integral = '∫'
+    integral = ''
     out_msg = f'{integral}DEBUG{integral} {msg}'
     if padding:
         out_msg = '\n' + out_msg + '\n'
-    log.cf.info(out_msg)  # I reserved 'debug' for valid iteration exits
+    print(out_msg)
 
 
 def print_json(chunk):
@@ -143,8 +140,8 @@ def print_json(chunk):
 
     :param chunk:
     """
-    log.cf.info(json.dumps(chunk, indent=4))
-    
+    print(json.dumps(chunk, indent=4))
+
 
 def print_table(table):
     """
@@ -153,7 +150,7 @@ def print_table(table):
     :return:
     """
     if not table:
-        log.cf.info("Table is empty.")
+        print("Table is empty.")
         return
 
     num_columns = len(table[0])
@@ -199,7 +196,7 @@ def print_row(row, column_widths):
                     formatted_row += f" {'':<{column_widths[i]}} |"
             else:
                 formatted_row += f" {str(item):<{column_widths[i]}} |"
-        log.cf.info(formatted_row)
+        print(formatted_row)
 
 
 def print_separator(column_widths):
@@ -210,4 +207,4 @@ def print_separator(column_widths):
     separator = "+"
     for width in column_widths:
         separator += f"{'-' * (width + 2)}+"
-    log.cf.info(separator + '\n')
+    print(separator)

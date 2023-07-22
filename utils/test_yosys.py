@@ -7,8 +7,6 @@ import sys
 sys.path.insert(0, '../')  # Add parent directory to Python path
 from logic_synthesis import *
 import time
-from log import *
-
 
 # define path to folder containing verilogs
 verilog_path = '../../../IO/inputs'
@@ -24,9 +22,9 @@ def find_verilogs(v_path):
     """
     verilogs = []
     for root, dirs, files in os.walk(v_path):
-        log.cf.info(root)
-        log.cf.info(dirs)
-        log.cf.info('\n')
+        print(root)
+        print(dirs)
+        print()
         prefix = ''
         if root != v_path:
             prefix = root.split('/')[-1] + '/'
@@ -40,7 +38,7 @@ def find_verilogs(v_path):
 
 
 verilogs_to_test = find_verilogs(verilog_path)
-log.cf.info(verilogs_to_test)
+print(verilogs_to_test)
 
 failed_verilogs = []
 for verilog in verilogs_to_test:
@@ -49,8 +47,8 @@ for verilog in verilogs_to_test:
         if not yosys_ok:
             failed_verilogs.append(str(verilog))
     except Exception as e:
-        log.cf.error('ERROR:\n' + str(e))
+        print('ERROR:\n' + str(e))
         failed_verilogs += [verilog]
         time.sleep(2)
-log.cf.info('NUMBER OF ERRORS: ' + str(len(failed_verilogs)))
-log.cf.info('FAILED Verilogs: ' + str(failed_verilogs))
+print('NUMBER OF ERRORS: ' + str(len(failed_verilogs)))
+print('FAILED Verilogs: ' + str(failed_verilogs))
