@@ -22,7 +22,7 @@ def call_mini_eugene(rules: list[str], orders_count: int = 1000):
       javac -cp .;jars/py4j.jar;.;jars/miniEugene-core-1.0.0-jar-with-dependencies.jar;./src src/miniEugenePermuter.java
     Execution:
       java -cp .:jars/py4j.jar:./jars/miniEugene-core-1.0.0-jar-with-dependencies.jar:./src miniEugenePermuter // mac
-      java -cp .;jars/py4j.jar;./jars/miniEugene-core-1.0.0-jar-with-dependencies.jar;./src miniEugenePermuter // win
+      java -cp .;jars/py4j.jar;.;jars/miniEugene-core-1.0.0-jar-with-dependencies.jar;./src miniEugenePermuter // win
     NOTE: May need to add java to the path and restart the console...
 
     :param rules:

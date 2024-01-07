@@ -116,6 +116,7 @@ class CELLO3:
             self.best_score = 0
             self.best_graphs = []
             self.units = 'Unknown_Units'
+            self.gen_mult_designs = True
 
             # Loggers
             log.config_logger(v_name, ucf_name, self.log_overwrite)
@@ -173,186 +174,197 @@ class CELLO3:
         except Exception as e:
             raise CelloError('Error with Verilog/UCF compatibility check', e)
 
-        # NOTE: Circuit Scoring
+        def computations_for_annealing_subdivision(chunk, chunk_cnt):
+            """
+            Runs the scoring (and all subsequent) functions on the provided subset of the dual annealing search space.
+            Results are placed into the corresponding subfolder in the output directory.
+            """
+
+            # NOTE: Circuit Scoring
+            try:
+                best_result = self.techmap(iter_, chunk, chunk_cnt)  # Executing the algorithm if things check out
+                if best_result is None:
+                    log.cf.error('\nProblem with best_result...\n')
+                    raise CelloError('Problem with best result')
+                # best_score = best_result[0]
+                best_graph = best_result[1]
+                truth_table = best_result[2]
+                truth_table_labels = best_result[3]
+
+                graph_inputs_for_printing = list(zip(self.rnl.inputs, best_graph.inputs))
+                graph_gates_for_printing = list(zip(self.rnl.gates, best_graph.gates))
+                graph_outputs_for_printing = list(zip(self.rnl.outputs, best_graph.outputs))
+                # NOTE: only rnl Gate nodes are dictionaries with inputs and outputs; Input and Output nodes are lists
+
+                if self.verbose:
+                    debug_print(f'final result for {self.verilog_name}.v+{self.ucf_name}: {best_result[0]}')
+                    debug_print(best_result[1])
+            except Exception as e:
+                raise CelloError('Error with circuit scoring', e)
+
+            # NOTE: RESULTS/CIRCUIT DESIGN
+            try:
+                print_centered(['RESULTS', self.verilog_name + ' + ' + self.ucf_name])
+                log.cf.info(f'CIRCUIT DESIGN:\n'
+                            f' - Best Design: {best_result[1]}\n'
+                            f' - Best Circuit Score: {self.best_score}')
+
+                if self.best_score == 0.0:
+                    log.cf.error('ERROR: Cello was unable to find any valid configurations...')
+                    raise Exception
+
+                log.cf.info(f'\nInputs ( input response = {best_graph.inputs[0].resp_func_eq} ):')
+                in_labels = {}
+                for rnl_in, g_in in graph_inputs_for_printing:
+                    log.cf.info(f' - {rnl_in} {str(g_in)} with max sensor output of {str(list(g_in.out_scores.items()))}')
+                    in_labels[rnl_in[0]] = g_in.name
+
+                log.cf.info(f'\nGates ( response function = {best_graph.gates[0].response_func};   '
+                            f'input composition = {best_graph.gates[0].input_comp} ):')
+                gate_labels = {}
+                for rnl_g, g_g in graph_gates_for_printing:
+                    log.cf.info(f' - {rnl_g} {g_g}')
+                    gate_labels[rnl_g] = g_g.gate_in_use
+
+                log.cf.info(f'\nOutputs ( unit conversion and/or hill response... ):')
+                out_labels = {}
+                for rnl_out, g_out in graph_outputs_for_printing:
+                    log.cf.info(f' - {rnl_out} {str(g_out)}')
+                    out_labels[rnl_out[0]] = g_out.name
+
+                tech_diagram_filepath = os.path.join(self.out_path, str(chunk), v_name, v_name)
+                replace_techmap_diagram_labels(tech_diagram_filepath, gate_labels, in_labels, out_labels)
+            except Exception as e:
+                log.cf.error('Error with results/circuit design\n')
+                raise CelloError('Error with results/circuit design', e)
+
+            # NOTE: TRUTH TABLE/GATE SCORING
+            try:
+                # Create the full path for the file
+                filepath = os.path.join(out_path, str(chunk), self.verilog_name, f"{self.verilog_name}_activity-table.csv")
+
+                # Ensure the directory exists
+                directory_path = os.path.dirname(filepath)
+                os.makedirs(directory_path, exist_ok=True)
+
+                log.cf.info(f'\n\nTRUTH TABLE/GATE SCORING:')
+                tb = [truth_table_labels] + truth_table
+                print_table(tb)
+                print('(See log for more precision)')
+
+                # Now write the CSV file
+                with open(f'{filepath}_activity-table.csv', 'w', newline='') as csvfile:
+                    csv_writer = csv.writer(csvfile)
+                    csv_writer.writerow(['Scores...'])
+                    csv_writer.writerows(zip(*[["{:.2e}".format(float(c)) if i > 0 else c for i, c in enumerate(row)]
+                                         for row in zip(*tb) if not row[0].endswith('_I/O')]))
+                    csv_writer.writerows([[''], ['Binary...']])
+                    csv_writer.writerows(zip(*[row for row in zip(*tb) if row[0].endswith('_I/O')]))
+
+                if self.verbose:
+                    debug_print("Truth Table (same as before, simpler format):")
+                    for r in tb:
+                        log.cf.info(r)
+
+            except Exception as e:
+                raise CelloError('Error with generating truth table/gate scoring', e)
+
+            # NOTE: CIRCUIT SCORE FILE
+            try:
+                fullpath = os.path.join(os.path.dirname(filepath), f"{os.path.basename(filepath)}_circuit-score.csv")
+
+                with open(fullpath, 'w', newline='') as csvfile:
+                    csv_writer = csv.writer(csvfile)
+                    csv_writer.writerow(['circuit_score', self.best_score])
+            except Exception as e:
+                raise CelloError('Error with generating circuit score file', e)
+
+            # NOTE: EUGENE FILE
+            try:
+                eugene = EugeneObject(self.ucf, graph_inputs_for_printing, graph_gates_for_printing,
+                                      graph_outputs_for_printing, best_graph)
+                log.cf.info('\n\nEUGENE FILES:')
+                if eugene.generate_eugene_structs():
+                    log.cf.info(" - Eugene object and structs created...")
+                if eugene.generate_eugene_cassettes():
+                    log.cf.info(" - Eugene cassettes created...")
+                structs, cassettes, sequences, device_rules, circuit_rules, fenceposts = \
+                    eugene.generate_eugene_helpers()
+                if structs and cassettes and sequences and device_rules and circuit_rules and fenceposts:
+                    log.cf.info(" - Eugene helpers created...")
+                if eugene.write_eugene(filepath + "_eugene.eug"):
+                    log.cf.info(f" - Eugene script written to {filepath}_eugene.eug")
+            except Exception as e:
+                raise CelloError('Error with generating eugene file', e)
+
+            # NOTE: DNA DESIGN
+            try:
+                dna_designs = DNADesign(structs, cassettes, sequences, device_rules, circuit_rules, fenceposts)
+                dna_designs.prep_to_get_part_orders()
+                mini_eugene_part_orders = dna_designs.get_part_orders()  # Calls miniEugene
+                dna_designs.write_dna_parts_info(filepath)
+                dna_designs.write_dna_parts_order(filepath)
+                dna_designs.write_plot_params(filepath)
+                dna_designs.write_regulatory_info(filepath)
+                dna_designs.write_dna_sequences(filepath)
+            except Exception as e:
+                raise CelloError('Error with generating DNA design', e)
+
+            # NOTE: SBOL DIAGRAM
+            try:
+                # SBOL XML
+                sbol_instance = SBOL(filepath, mini_eugene_part_orders[0], sequences)  # TODO: loop part orders
+                sbol_instance.generate_xml()
+
+                base_dir = os.path.dirname(filepath)
+
+                plot_parameters_file = os.path.join(base_dir, f"{os.path.basename(filepath)}_plot_parameters.csv")
+                dpl_part_info_file = os.path.join(base_dir, f"{os.path.basename(filepath)}_dpl_part_information.csv")
+                dpl_regulatory_info_file = os.path.join(base_dir, f"{os.path.basename(filepath)}_dpl_regulatory_information.csv")
+                dpl_dna_designs_file = os.path.join(base_dir, f"{os.path.basename(filepath)}_dpl_dna_designs.csv")
+                dpl_png_file = os.path.join(base_dir, f"{os.path.basename(filepath)}_dpl.png")
+                dpl_pdf_file = os.path.join(base_dir, f"{os.path.basename(filepath)}_dpl.pdf")
+
+                print(' - ', end='')
+                plotter(plot_parameters_file, dpl_part_info_file, dpl_regulatory_info_file,
+                        dpl_dna_designs_file, dpl_png_file, dpl_pdf_file)
+
+                log.cf.info('SBOL XML and related files generated')
+            except Exception as e:
+                raise CelloError('Error with generating SBOL diagram', e)
+
+            # NOTE: PLOTS
+            try:
+                plot_name = self.verilog_name + ' + ' + self.ucf_name
+                plot_bars(filepath, plot_name, best_graph, tb, self.units)
+                log.cf.info(' - Response plots generated\n\n')
+            except Exception as e:
+                log.cf.error(f'Unable to generate response plots:\n{e}', exc_info=True)
+                raise CelloError('Error with generating response plots', e)
+
+            # NOTE: ZIPFILE
+            try:
+                archive_name = os.path.join(out_path, f"{self.verilog_name}_all-files")
+                target_directory = os.path.join(out_path, self.verilog_name)
+
+                shutil.make_archive(archive_name, 'zip', target_directory)
+                shutil.move(f"{archive_name}.zip", target_directory)
+            except Exception as e:
+                raise CelloError('Error with generating zipfile', e)
+
+        def cycle_thru_annealing_subdivisions(chunk_cnt=5) -> None:
+            """
+            Subdivides the 'gates'-dimension of the dual annealing search space into several chunks (default 5), and
+            calls the computations_for_annealing_subdivision() function on each chunk.
+            :return: void
+            """
+            for chunk in range(chunk_cnt):
+                computations_for_annealing_subdivision(chunk, chunk_cnt)
+
         try:
-            best_result = self.techmap(iter_)  # Executing the algorithm if things check out
-            if best_result is None:
-                log.cf.error('\nProblem with best_result...\n')
-                raise CelloError('Problem with best result')
-            # best_score = best_result[0]
-            best_graph = best_result[1]
-            truth_table = best_result[2]
-            truth_table_labels = best_result[3]
-
-            graph_inputs_for_printing = list(zip(self.rnl.inputs, best_graph.inputs))
-            graph_gates_for_printing = list(zip(self.rnl.gates, best_graph.gates))
-            graph_outputs_for_printing = list(zip(self.rnl.outputs, best_graph.outputs))
-            # NOTE: only rnl Gate nodes are dictionaries with inputs and outputs; Input and Output nodes are lists
-
-            if self.verbose:
-                debug_print(f'final result for {self.verilog_name}.v+{self.ucf_name}: {best_result[0]}')
-                debug_print(best_result[1])
+            cycle_thru_annealing_subdivisions()
         except Exception as e:
-            raise CelloError('Error with circuit scoring', e)
-
-        # NOTE: RESULTS/CIRCUIT DESIGN
-        try:
-            print_centered(['RESULTS', self.verilog_name + ' + ' + self.ucf_name])
-            log.cf.info(f'CIRCUIT DESIGN:\n'
-                        f' - Best Design: {best_result[1]}\n'
-                        f' - Best Circuit Score: {self.best_score}')
-
-            if self.best_score == 0.0:
-                log.cf.error('ERROR: Cello was unable to find any valid configurations...')
-                raise Exception
-
-            log.cf.info(f'\nInputs ( input response = {best_graph.inputs[0].resp_func_eq} ):')
-            in_labels = {}
-            for rnl_in, g_in in graph_inputs_for_printing:
-                log.cf.info(f' - {rnl_in} {str(g_in)} with max sensor output of {str(list(g_in.out_scores.items()))}')
-                in_labels[rnl_in[0]] = g_in.name
-
-            log.cf.info(f'\nGates ( response function = {best_graph.gates[0].response_func};   '
-                        f'input composition = {best_graph.gates[0].input_comp} ):')
-            gate_labels = {}
-            for rnl_g, g_g in graph_gates_for_printing:
-                log.cf.info(f' - {rnl_g} {g_g}')
-                gate_labels[rnl_g] = g_g.gate_in_use
-
-            log.cf.info(f'\nOutputs ( unit conversion and/or hill response... ):')
-            out_labels = {}
-            for rnl_out, g_out in graph_outputs_for_printing:
-                log.cf.info(f' - {rnl_out} {str(g_out)}')
-                out_labels[rnl_out[0]] = g_out.name
-
-            tech_diagram_filepath = os.path.join(self.out_path, v_name, v_name)
-            replace_techmap_diagram_labels(tech_diagram_filepath, gate_labels, in_labels, out_labels)
-        except Exception as e:
-            log.cf.error('Error with results/circuit design\n')
-            raise CelloError('Error with results/circuit design', e)
-
-        # NOTE: TRUTH TABLE/GATE SCORING
-        try:
-            # Create the full path for the file
-            filepath = os.path.join(out_path, self.verilog_name, f"{self.verilog_name}_activity-table.csv")
-
-            # Ensure the directory exists
-            directory_path = os.path.dirname(filepath)
-            os.makedirs(directory_path, exist_ok=True)
-
-            log.cf.info(f'\n\nTRUTH TABLE/GATE SCORING:')
-            tb = [truth_table_labels] + truth_table
-            print_table(tb)
-            print('(See log for more precision)')
-
-            # Now write the CSV file
-            with open(f'{filepath}_activity-table.csv', 'w', newline='') as csvfile:
-                csv_writer = csv.writer(csvfile)
-                csv_writer.writerow(['Scores...'])
-                csv_writer.writerows(zip(*[["{:.2e}".format(float(c)) if i > 0 else c for i, c in enumerate(row)]
-                                     for row in zip(*tb) if not row[0].endswith('_I/O')]))
-                csv_writer.writerows([[''], ['Binary...']])
-                csv_writer.writerows(zip(*[row for row in zip(*tb) if row[0].endswith('_I/O')]))
-
-            if self.verbose:
-                debug_print("Truth Table (same as before, simpler format):")
-                for r in tb:
-                    log.cf.info(r)
-
-        except Exception as e:
-            raise CelloError(
-                'Error with generating truth table/gate scoring', e)
-
-        # NOTE: CIRCUIT SCORE FILE
-        try:
-            fullpath = os.path.join(os.path.dirname(filepath), f"{os.path.basename(filepath)}_circuit-score.csv")
-
-            with open(fullpath, 'w', newline='') as csvfile:
-                csv_writer = csv.writer(csvfile)
-                csv_writer.writerow(['circuit_score', self.best_score])
-        except Exception as e:
-            raise CelloError('Error with generating circuit score file', e)
-
-        # NOTE: EUGENE FILE
-        try:
-            eugene = EugeneObject(self.ucf, graph_inputs_for_printing, graph_gates_for_printing,
-                                  graph_outputs_for_printing, best_graph)
-            log.cf.info('\n\nEUGENE FILES:')
-            if eugene.generate_eugene_structs():
-                log.cf.info(" - Eugene object and structs created...")
-            if eugene.generate_eugene_cassettes():
-                log.cf.info(" - Eugene cassettes created...")
-            structs, cassettes, sequences, device_rules, circuit_rules, fenceposts = \
-                eugene.generate_eugene_helpers()
-            if structs and cassettes and sequences and device_rules and circuit_rules and fenceposts:
-                log.cf.info(" - Eugene helpers created...")
-            if eugene.write_eugene(filepath + "_eugene.eug"):
-                log.cf.info(f" - Eugene script written to {filepath}_eugene.eug")
-        except Exception as e:
-            raise CelloError('Error with generating eugene file', e)
-
-        # NOTE: DNA DESIGN
-        try:
-            dna_designs = DNADesign(structs, cassettes, sequences, device_rules, circuit_rules, fenceposts)
-            dna_designs.prep_to_get_part_orders()
-            mini_eugene_part_orders = dna_designs.get_part_orders()  # Calls miniEugene
-            dna_designs.write_dna_parts_info(filepath)
-            dna_designs.write_dna_parts_order(filepath)
-            dna_designs.write_plot_params(filepath)
-            dna_designs.write_regulatory_info(filepath)
-            dna_designs.write_dna_sequences(filepath)
-        except Exception as e:
-            raise CelloError('Error with generating DNA design', e)
-
-        # NOTE: SBOL DIAGRAM
-        try:
-            # SBOL XML
-            sbol_instance = SBOL(filepath, mini_eugene_part_orders[0], sequences)  # TODO: loop part orders
-            sbol_instance.generate_xml()
-
-            base_dir = os.path.dirname(filepath)
-
-            plot_parameters_file = os.path.join(
-                base_dir, f"{os.path.basename(filepath)}_plot_parameters.csv")
-            dpl_part_info_file = os.path.join(
-                base_dir, f"{os.path.basename(filepath)}_dpl_part_information.csv")
-            dpl_regulatory_info_file = os.path.join(
-                base_dir, f"{os.path.basename(filepath)}_dpl_regulatory_information.csv")
-            dpl_dna_designs_file = os.path.join(
-                base_dir, f"{os.path.basename(filepath)}_dpl_dna_designs.csv")
-            dpl_png_file = os.path.join(
-                base_dir, f"{os.path.basename(filepath)}_dpl.png")
-            dpl_pdf_file = os.path.join(
-                base_dir, f"{os.path.basename(filepath)}_dpl.pdf")
-
-            print(' - ', end='')
-            plotter(plot_parameters_file, dpl_part_info_file, dpl_regulatory_info_file,
-                    dpl_dna_designs_file, dpl_png_file, dpl_pdf_file)
-
-            log.cf.info('SBOL XML and related files generated')
-        except Exception as e:
-            raise CelloError('Error with generating SBOL diagram', e)
-
-        # NOTE: PLOTS
-        try:
-            plot_name = self.verilog_name + ' + ' + self.ucf_name
-            plot_bars(filepath, plot_name, best_graph, tb, self.units)
-            log.cf.info(' - Response plots generated\n\n')
-        except Exception as e:
-            log.cf.error(
-                f'Unable to generate response plots:\n{e}', exc_info=True)
-            raise CelloError('Error with generating response plots', e)
-
-        # NOTE: ZIPFILE
-        try:
-            archive_name = os.path.join(
-                out_path, f"{self.verilog_name}_all-files")
-            target_directory = os.path.join(out_path, self.verilog_name)
-
-            shutil.make_archive(archive_name, 'zip', target_directory)
-            shutil.move(f"{archive_name}.zip", target_directory)
-        except Exception as e:
-            raise CelloError('Error with generating zipfile', e)
+            raise CelloError('Error with subdividing dual annealing chunks', e)
 
     def __load_netlist(self):
         net_path = os.path.join(self.out_path, self.verilog_name, self.verilog_name + '.json')
@@ -493,7 +505,7 @@ class CELLO3:
 
         return pass_check, max_iterations
 
-    def techmap(self, iter_: int):
+    def techmap(self, iter_: int, chunk: int, chunk_cnt: int):
         """
         Calls functions that will generate the gate assignments.
 
@@ -545,11 +557,11 @@ class CELLO3:
 
         # best_assignments = []
         if not self.exhaustive:
-            best_assignments = self.simulated_annealing_assign(
-                i_list, o_list, g_list, i, o, g, circuit, iter_)
+            best_assignments = self.simulated_annealing_assign(i_list, o_list, g_list, i, o, g, circuit, iter_,
+                                                               chunk, chunk_cnt)
         else:
-            best_assignments = self.exhaustive_assign(
-                i_list, o_list, g_list, i, o, g, circuit, iter_)
+            best_assignments = self.exhaustive_assign(i_list, o_list, g_list, i, o, g, circuit, iter_,
+                                                      chunk, chunk_cnt)
 
         print_centered('End of GATE ASSIGNMENT')
         log.cf.info('\n')
@@ -557,7 +569,7 @@ class CELLO3:
         return max(best_assignments, key=lambda x: x[0]) if len(best_assignments) > 0 else best_assignments
 
     def simulated_annealing_assign(self, i_list: list, o_list: list, g_list: list, i: int, o: int, g: int,
-                                   netgraph: GraphParser, iter_: int) -> list:
+                                   netgraph: GraphParser, iter_: int, chunk: int, chunk_cnt: int) -> list:
         """
         Uses scipy's dual annealing func to efficiently find a regional optimum.
         (See notes on Dual Annealing below...)
@@ -576,12 +588,15 @@ class CELLO3:
             print_centered(
                 'Running SIMULATED ANNEALING gate-assignment algorithm...')
             i_perms, o_perms, g_perms = [], [], []
+            gate_permutations = list(itertools.permutations(g_list, g))
+            chunk_size = len(gate_permutations) / chunk_cnt
+            gate_perms_chunk = gate_permutations[chunk * chunk_size:(chunk + 1) * chunk_size]
             # TODO: Optimize permutation arrays
             for i_perm in itertools.permutations(i_list, i):
                 i_perms.append(i_perm)
             for o_perm in itertools.permutations(o_list, o):
                 o_perms.append(o_perm)
-            for g_perm in itertools.permutations(g_list, g):
+            for g_perm in gate_perms_chunk:
                 g_perms.append(g_perm)
             max_fun = iter_ if iter_ < 1_000 else 1_000
 
@@ -632,7 +647,7 @@ class CELLO3:
         return self.best_graphs
 
     def exhaustive_assign(self, i_list: list, o_list: list, g_list: list, i: int, o: int, g: int,
-                          netgraph: GraphParser, iter_: int) -> list:
+                          netgraph: GraphParser, iter_: int, chunk: int, chunk_cnt: int) -> list:
         """
         Algorithm to check *all* possible permutations of inputs, gates, and outputs for this circuit.
         Depending on the number of possible iterations, this could take prohibitively long.
@@ -650,11 +665,13 @@ class CELLO3:
         """
         print_centered('Running EXHAUSTIVE gate-assignment algorithm...')
         log.cf.info('Scoring potential gate assignments...')
+        gate_permutations = list(itertools.permutations(g_list, g))
+        chunk_size = len(gate_permutations)/chunk_cnt
+        gate_perms_chunk = gate_permutations[chunk*chunk_size:(chunk+1)*chunk_size]
         for I_perm in itertools.permutations(i_list, i):
             for O_perm in itertools.permutations(o_list, o):
-                for G_perm in itertools.permutations(g_list, g):
-                    self.prep_assign_for_scoring(
-                        (I_perm, O_perm, G_perm), (None, None, None, netgraph, i, o, g, iter_))
+                for G_perm in gate_perms_chunk:
+                    self.prep_assign_for_scoring((I_perm, O_perm, G_perm), (None, None, None, netgraph, i, o, g, iter_))
 
         if not self.verbose:
             log.cf.info('\n')
