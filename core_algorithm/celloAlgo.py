@@ -127,58 +127,58 @@ class CELLO3:
         except Exception as e:
             raise CelloError("Error with initialization", e)
 
-        # NOTE: Logic Synthesis (YOSYS)
-        try:
-            # yosys cmd set 1 seems best after trial & error
-            cont = call_YOSYS(in_path, out_path, v_name, yosys_cmd_choice)
-
-            print_centered('End of Logic Synthesis')
-            if not cont:
-                # raise an error
-                # break if run into problem with yosys, call_YOSYS() will show the error.
-                raise CelloError('Error with logic synthesis')
-
-            # initialize RG from netlist JSON output from Yosys
-            self.rnl = self.__load_netlist()
-
-            if not self.rnl:
-                raise CelloError('Error with logic synthesis')
-        except Exception as e:
-            raise CelloError('Error with logic synthesis', e)
-
-        # NOTE: Initializes UCF, Input, and Output from filepaths
-        try:
-            self.ucf = UCF(self.in_path, ucf_name, in_name, out_name)
-            units = self.ucf.query_top_level_collection(self.ucf.UCFout, 'measurement_std')
-            if units:
-                self.units = units[0]['signal_carrier_units']
-            else:
-                units = self.ucf.query_top_level_collection(self.ucf.UCFmain, 'measurement_std')
-                if units:
-                    self.units = units[0]['signal_carrier_units']
-                else:
-                    log.cf.warning('Cannot find units...')
-            if not self.ucf.valid:
-                raise CelloError('Error with UCF')
-        except Exception as e:
-            raise CelloError('Error reading UCF', e)
-
-        # NOTE: Verilog/UCF Compatibility Check
-        try:
-            valid: bool
-            iter_: int
-            valid, iter_ = self.check_conditions(verbose=True)
-            if not valid:
-                raise Exception("Condition check failed")
-            log.cf.info(f'\nCondition check passed? {valid}\n')
-        except Exception as e:
-            raise CelloError('Error with Verilog/UCF compatibility check', e)
-
         def computations_for_annealing_subdivision(chunk, chunk_cnt):
             """
             Runs the scoring (and all subsequent) functions on the provided subset of the dual annealing search space.
             Results are placed into the corresponding subfolder in the output directory.
             """
+
+            # NOTE: Logic Synthesis (YOSYS)
+            try:
+                # yosys cmd set 1 seems best after trial & error
+                cont = call_YOSYS(in_path, out_path, v_name, chunk, yosys_cmd_choice)
+
+                print_centered('End of Logic Synthesis')
+                if not cont:
+                    # raise an error
+                    # break if run into problem with yosys, call_YOSYS() will show the error.
+                    raise CelloError('Error with logic synthesis')
+
+                # initialize RG from netlist JSON output from Yosys
+                self.rnl = self.__load_netlist()
+
+                if not self.rnl:
+                    raise CelloError('Error with logic synthesis')
+            except Exception as e:
+                raise CelloError('Error with logic synthesis', e)
+
+            # NOTE: Initializes UCF, Input, and Output from filepaths
+            try:
+                self.ucf = UCF(self.in_path, ucf_name, in_name, out_name)
+                units = self.ucf.query_top_level_collection(self.ucf.UCFout, 'measurement_std')
+                if units:
+                    self.units = units[0]['signal_carrier_units']
+                else:
+                    units = self.ucf.query_top_level_collection(self.ucf.UCFmain, 'measurement_std')
+                    if units:
+                        self.units = units[0]['signal_carrier_units']
+                    else:
+                        log.cf.warning('Cannot find units...')
+                if not self.ucf.valid:
+                    raise CelloError('Error with UCF')
+            except Exception as e:
+                raise CelloError('Error reading UCF', e)
+
+            # NOTE: Verilog/UCF Compatibility Check
+            try:
+                valid: bool
+                iter_: int
+                valid, iter_ = self.check_conditions(verbose=True)
+                if not valid:
+                    raise Exception("Condition check failed")
+                log.cf.info(f'\nCondition check passed? {valid}\n')
+            except Exception as e:
+                raise CelloError('Error with Verilog/UCF compatibility check', e)
 
             # NOTE: Circuit Scoring
             try:
@@ -232,7 +232,7 @@ class CELLO3:
                     log.cf.info(f' - {rnl_out} {str(g_out)}')
                     out_labels[rnl_out[0]] = g_out.name
 
-                tech_diagram_filepath = os.path.join(self.out_path, str(chunk), v_name, v_name)
+                tech_diagram_filepath = os.path.join(self.out_path, v_name, str(chunk), v_name)
                 replace_techmap_diagram_labels(tech_diagram_filepath, gate_labels, in_labels, out_labels)
             except Exception as e:
                 log.cf.error('Error with results/circuit design\n')
@@ -241,7 +241,7 @@ class CELLO3:
             # NOTE: TRUTH TABLE/GATE SCORING
             try:
                 # Create the full path for the file
-                filepath = os.path.join(out_path, str(chunk), self.verilog_name, f"{self.verilog_name}_activity-table.csv")
+                filepath = os.path.join(out_path, self.verilog_name, str(chunk), f"{self.verilog_name}_activity-table.csv")
 
                 # Ensure the directory exists
                 directory_path = os.path.dirname(filepath)
@@ -345,7 +345,7 @@ class CELLO3:
             # NOTE: ZIPFILE
             try:
                 archive_name = os.path.join(out_path, f"{self.verilog_name}_all-files")
-                target_directory = os.path.join(out_path, self.verilog_name)
+                target_directory = os.path.join(out_path, self.verilog_name, str(chunk))
 
                 shutil.make_archive(archive_name, 'zip', target_directory)
                 shutil.move(f"{archive_name}.zip", target_directory)
@@ -585,12 +585,11 @@ class CELLO3:
         :return: list: self.best_graphs: [(circuit_score, graph, tb, tb_labels)]
         """
         with threadpool_limits(limits=1, user_api='blas'):  # TODO: Needed?
-            print_centered(
-                'Running SIMULATED ANNEALING gate-assignment algorithm...')
+            print_centered('Running SIMULATED ANNEALING gate-assignment algorithm...')
             i_perms, o_perms, g_perms = [], [], []
-            gate_permutations = list(itertools.permutations(g_list, g))
-            chunk_size = len(gate_permutations) / chunk_cnt
-            gate_perms_chunk = gate_permutations[chunk * chunk_size:(chunk + 1) * chunk_size]
+            gate_perms = list(itertools.permutations(g_list, g))
+            chunk_size = len(gate_perms) / chunk_cnt
+            gate_perms_chunk = gate_perms[int(chunk * chunk_size):int((chunk + 1) * chunk_size)]
             # TODO: Optimize permutation arrays
             for i_perm in itertools.permutations(i_list, i):
                 i_perms.append(i_perm)

@@ -12,10 +12,10 @@ from core_algorithm.utils import log
 import re
 
 
-def call_YOSYS(in_path=None, out_path=None, v_name=None, choice=0, no_files=False):
+def call_YOSYS(in_path=None, out_path=None, v_name=None, chunk=0, choice=0, no_files=False):
     try:
         # Setting up the output directory
-        new_out = os.path.join(out_path, v_name)
+        new_out = os.path.join(out_path, v_name, str(chunk))
 
         # Remove the directory if it exists, then create it
         if os.path.exists(new_out):
